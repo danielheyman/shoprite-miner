@@ -3,6 +3,7 @@ var app = express();
 global.mongoose = require('mongoose');
 mongoose.connect('mongodb://localhost/shoprite');
 var request = require('request');
+const auth = 'a6db23de-f1eb-e611-8708-d89d6763b1d9';
 
 var db = mongoose.connection;
 db.on('error', console.error.bind(console, 'connection error:'));
@@ -35,7 +36,7 @@ function findCategory(store, category_id, name) {
         
         var options = {
             url: '',
-            headers: { 'Authorization': '8e481e62-efea-e611-8708-d89d6763b1d9' }
+            headers: { 'Authorization': auth }
         };
         
         if(!category_id) options.url = 'https://shop.shoprite.com/api/product/v5/categories/store/' + store;
@@ -73,23 +74,25 @@ function findCategoryTree(category) {
 }
 
 function findProduct(store, category_id, category_name, skip) {
-    Product.findOne({store: store, category_id: category_id, skip: skip}, function(err, product) {
-        if(err) console.log(err);
-        if(product) return;
+    Product.count({store: store, category_id: category_id}, function(err, count) {
+        if(err) return;
+        if(count > skip) return;
         
         var options = {
             url: 'https://shop.shoprite.com/api/product/v5/products/category/' + category_id + '/store/' + store + '?take=20&skip=' + skip,
-            headers: { 'Authorization': '8e481e62-efea-e611-8708-d89d6763b1d9' }
+            headers: { 'Authorization': auth }
         };
         
         request(options, function (error, response, body) {
             if (error || response.statusCode != 200) return;
             
             var product = JSON.parse(body);
-            var prod = {store: store, category_id: category_id, category_name: category_name, item_count: product.ItemCount, skip_count: skip, items: []};
             
             product.Items.forEach(function(item) {
-                item = {
+                prod = {
+                    store: store, 
+                    category_id: category_id, 
+                    category_name: category_name,
                     aisle: item.Aisle,
                     brand: item.Brand,
                     current_price: item.CurrentPrice,
@@ -102,16 +105,14 @@ function findProduct(store, category_id, category_name, skip) {
                     size: item.Size,
                     sku: item.Sku
                 };
-                prod.items.push(item);
+                
+                Product.create(prod, function (err, prod) {
+                    if(err) return;
+                    console.log('created product');
+                });
             });
             
-            Product.create(prod, function (err, prod) {
-                if(err) return;
-                if(err) exit();
-                console.log('created product');
-            });
-            
-            if(prod.item_count > skip + 20) {
+            if(product.ItemCount > skip + 20) {
                 findProduct(store, category_id, category_name, skip + 20);
             }
         });
