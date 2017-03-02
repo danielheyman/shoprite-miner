@@ -1,4 +1,4 @@
-const auth = 'a0642d37-61fd-e611-8708-d89d6763b1d9';
+const auth = '5e07ce1a-83ff-e611-8708-d89d6763b1d9';
 
 
 var express = require('express');
@@ -6,6 +6,7 @@ var app = express();
 global.mongoose = require('mongoose');
 mongoose.connect('mongodb://localhost/shoprite');
 var request = require('request');
+var async = require('async');
 
 
 var db = mongoose.connection;
@@ -20,13 +21,26 @@ Category = require('./models/Category');
 Nutrition = require('./models/Nutrition');
 Product = require('./models/Product');
 
+var options = function(url) { 
+    return {
+        url: url,
+        headers: { 'Authorization': auth }
+    };
+};
+
+
+
 app.get('/', function(req, res) {
     Product.find({}).select('brand name current_price sku').populate('nutrition', 'protein calories serving_count').exec(function(err, prods) {
         if(err) return console.log(err);
         
         prods = prods.map(function(prod) {
             prod = prod.toJSON();
-            prod.current_price = Number(prod.current_price.replace(/[^0-9\.]+/g,""));
+            if(prod.current_price.indexOf('for') > -1) {
+                var forSplit = prod.current_price.split("for");
+                prod.current_price = Number(forSplit[1].replace(/[^0-9\.]+/g,"")) / Number(forSplit[0].replace(/[^0-9\.]+/g,""));
+            }
+            else prod.current_price = Number(prod.current_price.replace(/[^0-9\.]+/g,""));
             if(prod.nutriton && !prod.nutriton.serving_count) prod.nutriton.serving_count = 1;
             return prod;
         });
@@ -66,9 +80,74 @@ app.get('/', function(req, res) {
     });
 });
 
-app.get('/hoboken', function (req, res) {
+app.get('/hoboken/update', function(req, res) {
     Store.findOne({name: 'Hoboken'}, function(err, store) {
-        if(err) console.log(err);
+        if(err || !store) return console.log(err);
+        
+        async.series([
+            function(callback) {
+                var url = "https://shop.shoprite.com/api/product/v5/categories/store/" + store.shoprite_id + "/special";
+                request(options(url), function (error, response, body) {
+                    if (error) return console.log(err);
+                    async.eachOfLimit(JSON.parse(body), 10, function(cat, key, cb) {
+                        console.log('Updating category: ' + cat.Id);
+                        findProduct(store.shoprite_id, cat.Id, 0, function() {
+                            console.log('Finished category: ' + cat.Id);
+                            cb();
+                        });
+                    }, function() {
+                        callback();
+                    });
+                });
+            }, 
+            function(callback) {
+                Product.find({store: store.shoprite_id, regular_price: {$ne: ""}, $or: [{sale_until: null}, {sale_until: {$lt: new Date()}}]}, function(err, prods) {
+                    if(err || !prods) return console.log(err);
+                    
+                    var count = 1;
+                    
+                    async.eachOfLimit(prods, 50, function(prod, index, callback) {
+                        var url = "https://shop.shoprite.com/api/product/v5/product/store/" + store.shoprite_id + "/sku/" + prod.sku;
+                        
+                        request(options(url), function (error, response, body) {
+                            if (error) {
+                                console.log('err: ' + error);
+                                return callback();
+                            }
+                            if (response.statusCode != 200) {
+                                console.log('err: ' + response.statusCode);
+                                return callback();
+                            } 
+                            
+                            var item = JSON.parse(body);
+                            
+                            prod.current_price = item.CurrentPrice;
+                            prod.current_unit_price = item.CurrentUnitPrice;
+                            prod.regular_price = item.RegularPrice;
+                            if(item.Sale && item.Sale.DateText && item.Sale.DateText.indexOf('until') > -1) {
+                                prod.sale_until = new Date(item.Sale.DateText.split('until ')[1]);
+                            } else {
+                                prod.sale_until = null;
+                            }
+
+                            prod.save();
+                            console.log("updated " + count++);
+                            callback();
+                        });
+                    }, function() {
+                        callback();
+                    });
+                });
+            }
+        ], function() {
+            res.send('done');
+        });
+    });
+});
+
+app.get('/hoboken/rescrape', function (req, res) {
+    Store.findOne({name: 'Hoboken'}, function(err, store) {
+        if(err) return console.log(err);
         if(store) return findCategory(store.shoprite_id, null, store.name + ' Store');
         
         Store.create({ name: 'Hoboken', shoprite_id: '7EF2370'}, function (err, store) {
@@ -79,16 +158,9 @@ app.get('/hoboken', function (req, res) {
     res.send('parsing');
 });
 
-var options = function(url) { 
-    return {
-        url: url,
-        headers: { 'Authorization': auth }
-    };
-};
-
 function findCategory(store, category_id, name) {
     Category.findOne({store: store, category_id: category_id}, function(err, category) {
-        if(err) console.log(err);
+        if(err) return console.log(err);
         if(category) return findCategoryTree(category); 
         
         var url = (!category_id) ? 'https://shop.shoprite.com/api/product/v5/categories/store/' + store :
@@ -121,59 +193,57 @@ function findCategory(store, category_id, name) {
 function findCategoryTree(category) {
     category.categories.forEach(function(cat) {
         if(cat.has_subcategories) findCategory(category.store, cat.category_id, cat.name);
-        if(cat.has_products) findProduct(category.store, cat.category_id, cat.name, 0);
+        if(cat.has_products) findProduct(category.store, cat.category_id, 0);
     });
 }
 
-function findProduct(store, category_id, category_name, skip) {
-    Product.find({store: store, category_id: category_id}, function(err, prods) {
-        if(err) return;
+function findProduct(store, category_id, skip, cb) {
+    var url = 'https://shop.shoprite.com/api/product/v5/products/category/' + category_id + '/store/' + store + '?take=20&skip=' + skip;
+    
+    request(options(url), function (error, response, body) {
+        if (error || response.statusCode != 200) {
+            if(cb) cb();
+            return;
+        }
         
-        var url = 'https://shop.shoprite.com/api/product/v5/products/category/' + category_id + '/store/' + store + '?take=20&skip=' + skip;
+        var product = JSON.parse(body);
         
-        request(options(url), function (error, response, body) {
-            if (error || response.statusCode != 200) return;
-            
-            var product = JSON.parse(body);
-            
-            if(prods.length >= product.ItemCount) {
-                prods.forEach(function(prod) {
-                    findNutrition(prod.sku);
-                });
-                return;
+        console.log('found products');
+        
+        product.Items.forEach(function(item) {
+            prod = {
+                store: store, 
+                aisle: item.Aisle,
+                brand: item.Brand,
+                current_price: item.CurrentPrice,
+                current_unit_price: item.CurrentUnitPrice,
+                description: item.Description,
+                id: item.Id,
+                item_type: item.ItemType,
+                name: item.Name,
+                regular_price: item.RegularPrice,
+                size: item.Size,
+                sku: item.Sku
+            };
+            if(item.Sale && item.Sale.DateText && item.Sale.DateText.indexOf('until') > -1) {
+                prod.sale_until = new Date(item.Sale.DateText.split('until ')[1]);
+            } else {
+                prod.sale_until = null;
             }
             
-            product.Items.forEach(function(item) {
-                prod = {
-                    store: store, 
-                    category_id: category_id, 
-                    category_name: category_name,
-                    aisle: item.Aisle,
-                    brand: item.Brand,
-                    current_price: item.CurrentPrice,
-                    current_unit_price: item.CurrentUnitPrice,
-                    description: item.Description,
-                    id: item.Id,
-                    item_type: item.ItemType,
-                    name: item.Name,
-                    regular_price: item.RegularPrice,
-                    size: item.Size,
-                    sku: item.Sku
-                };
-                
-                Product.create(prod, function (err, prod) {
-                    if(err) return;
-                    console.log('created product');
-                });
-                
-                findNutrition(prod.sku);
+            Product.update({sku: prod.sku}, prod, {upsert: true}, function (err, prod) {
+                if(err) return;
             });
             
-            
-            if(product.ItemCount > skip + 20) {
-                findProduct(store, category_id, category_name, skip + 20);
-            }
+            findNutrition(prod.sku);
         });
+        
+        
+        if(product.ItemCount > skip + 20) {
+            findProduct(store, category_id, skip + 20, cb);
+        } else {
+            if(cb) cb();
+        }
     });
 }
 
