@@ -13,8 +13,17 @@ var Product = new mongoose.Schema({
     regular_price: String,
     size: String,
     sku: String
+}, {
+    toJSON: { virtuals: true }
 });
 
 Product.index({ store: 1, category_id: 1, sku: 1 }, { unique: true });
+
+Product.virtual('nutrition', {
+    ref: 'Nutrition',
+    localField: 'sku',
+    foreignField: 'sku',
+    justOne: true
+});
 
 module.exports = mongoose.model('Product', Product);
