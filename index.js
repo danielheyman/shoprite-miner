@@ -1,4 +1,4 @@
-const auth = '5e07ce1a-83ff-e611-8708-d89d6763b1d9';
+const auth = '67d2de9b-2601-e711-8708-d89d6763b1d9';
 
 
 var express = require('express');
@@ -89,25 +89,28 @@ app.get('/hoboken/update', function(req, res) {
                 var url = "https://shop.shoprite.com/api/product/v5/categories/store/" + store.shoprite_id + "/special";
                 request(options(url), function (error, response, body) {
                     if (error) return console.log(err);
-                    async.eachOfLimit(JSON.parse(body), 10, function(cat, key, cb) {
+                    async.eachOfLimit(JSON.parse(body), 30, function(cat, key, cb) {
                         console.log('Updating category: ' + cat.Id);
                         findProduct(store.shoprite_id, cat.Id, 0, function() {
                             console.log('Finished category: ' + cat.Id);
                             cb();
                         });
                     }, function() {
+                        console.log('Finished updating categories');
                         callback();
                     });
                 });
             }, 
             function(callback) {
-                Product.find({store: store.shoprite_id, regular_price: {$ne: ""}, $or: [{sale_until: null}, {sale_until: {$lt: new Date()}}]}, function(err, prods) {
-                    if(err || !prods) return console.log(err);
+                Product.find({store: store.shoprite_id, regular_price: {$ne: ""}, $or: [{sale_until: null}, {sale_until: {$lt: new Date(new Date().toJSON().slice(0,10).replace(/-/g,'/'))}}]}, function(err, prods) {
+                    if(err || !prods) return callback();
+                    
+                    console.log('Updating ' + prods.length + ' expired products.');
                     
                     var count = 1;
                     
                     async.eachOfLimit(prods, 50, function(prod, index, callback) {
-                        var url = "https://shop.shoprite.com/api/product/v5/product/store/" + store.shoprite_id + "/sku/" + prod.sku;
+                        var url = "https://shop.shoprite.com/api/pro    duct/v5/product/store/" + store.shoprite_id + "/sku/" + prod.sku;
                         
                         request(options(url), function (error, response, body) {
                             if (error) {
@@ -135,6 +138,7 @@ app.get('/hoboken/update', function(req, res) {
                             callback();
                         });
                     }, function() {
+                        console.log('Finished updating expired products');
                         callback();
                     });
                 });
