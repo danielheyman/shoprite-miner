@@ -7,6 +7,8 @@ global.mongoose = require('mongoose');
 mongoose.connect('mongodb://localhost/shoprite');
 var request = require('request');
 var async = require('async');
+var fs = require('fs');
+var beginningOfDay = new Date(new Date().toJSON().slice(0,10).replace(/-/g,'/'));
 
 
 var db = mongoose.connection;
@@ -30,7 +32,7 @@ var options = function(url) {
 
 
 
-app.get('/', function(req, res) {
+app.get('/hoboken', function(req, res) {
     Product.find({}).select('brand name current_price sku').populate('nutrition', 'protein calories serving_count').exec(function(err, prods) {
         if(err) return console.log(err);
         
@@ -86,23 +88,38 @@ app.get('/hoboken/update', function(req, res) {
         
         async.series([
             function(callback) {
-                var url = "https://shop.shoprite.com/api/product/v5/categories/store/" + store.shoprite_id + "/special";
-                request(options(url), function (error, response, body) {
-                    if (error) return console.log(err);
-                    async.eachOfLimit(JSON.parse(body), 30, function(cat, key, cb) {
-                        console.log('Updating category: ' + cat.Id);
-                        findProduct(store.shoprite_id, cat.Id, 0, function() {
-                            console.log('Finished category: ' + cat.Id);
-                            cb();
+                fs.readFile('last_updated.json', "utf8", function(err, data) {
+                    if (err) data = {};
+                    else data = JSON.parse(data);
+                    
+                    if(data.hasOwnProperty('hoboken') && data.hoboken == beginningOfDay.getTime()) {
+                        console.log('updated deals today');
+                        return callback();
+                    }
+
+                    var url = "https://shop.shoprite.com/api/product/v5/categories/store/" + store.shoprite_id + "/special";
+                    request(options(url), function (error, response, body) {
+                        if (error || response.statusCode !== 200) return console.log(err);
+                        
+                        async.eachOfLimit(JSON.parse(body), 30, function(cat, key, cb) {
+                            console.log('Updating category: ' + cat.Id);
+                            findProduct(store.shoprite_id, cat.Id, 0, function() {
+                                console.log('Finished category: ' + cat.Id);
+                                cb();
+                            });
+                        }, function() {
+                            data.hoboken = beginningOfDay.getTime();
+                            fs.writeFileSync('last_updated.json', JSON.stringify(data));
+
+                            console.log('Finished updating categories');
+                            callback();
                         });
-                    }, function() {
-                        console.log('Finished updating categories');
-                        callback();
                     });
+                    
                 });
             }, 
             function(callback) {
-                Product.find({store: store.shoprite_id, regular_price: {$ne: ""}, $or: [{sale_until: null}, {sale_until: {$lt: new Date(new Date().toJSON().slice(0,10).replace(/-/g,'/'))}}]}, function(err, prods) {
+                Product.find({store: store.shoprite_id, regular_price: {$ne: ""}, $or: [{sale_until: null}, {sale_until: {$lt: beginningOfDay}}]}, function(err, prods) {
                     if(err || !prods) return callback();
                     
                     console.log('Updating ' + prods.length + ' expired products.');
@@ -110,7 +127,7 @@ app.get('/hoboken/update', function(req, res) {
                     var count = 1;
                     
                     async.eachOfLimit(prods, 50, function(prod, index, callback) {
-                        var url = "https://shop.shoprite.com/api/pro    duct/v5/product/store/" + store.shoprite_id + "/sku/" + prod.sku;
+                        var url = "https://shop.shoprite.com/api/product/v5/product/store/" + store.shoprite_id + "/sku/" + prod.sku;
                         
                         request(options(url), function (error, response, body) {
                             if (error) {
@@ -120,7 +137,7 @@ app.get('/hoboken/update', function(req, res) {
                             if (response.statusCode != 200) {
                                 console.log('err: ' + response.statusCode);
                                 return callback();
-                            } 
+                            }
                             
                             var item = JSON.parse(body);
                             
