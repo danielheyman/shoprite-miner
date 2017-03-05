@@ -1,5 +1,7 @@
-const auth = '67d2de9b-2601-e711-8708-d89d6763b1d9';
-
+const auth = 'bb672f98-5901-e711-8708-d89d6763b1d9';
+const cal_goal = 1700; // to calculate cost
+const prot_goal = 150; // at least this much for cal_goal
+const cost_per_day = 8; // maximum cost
 
 var express = require('express');
 var app = express();
@@ -21,6 +23,7 @@ db.once('open', function() {
 Store = require('./models/Store');
 Category = require('./models/Category');
 Nutrition = require('./models/Nutrition');
+NutritionNDB = require('./models/NutritionNDB');
 Product = require('./models/Product');
 
 var options = function(url) { 
@@ -33,7 +36,7 @@ var options = function(url) {
 
 
 app.get('/hoboken', function(req, res) {
-    Product.find({}).select('brand name current_price sku').populate('nutrition', 'protein calories serving_count').exec(function(err, prods) {
+    Product.find({}).select('brand name current_price size sku').populate('nutrition', 'protein calories serving_count').populate('nutritionNDB', 'Protein Energy eq_gram unit_type unit').exec(function(err, prods) {
         if(err) return console.log(err);
         
         prods = prods.map(function(prod) {
@@ -43,42 +46,109 @@ app.get('/hoboken', function(req, res) {
                 prod.current_price = Number(forSplit[1].replace(/[^0-9\.]+/g,"")) / Number(forSplit[0].replace(/[^0-9\.]+/g,""));
             }
             else prod.current_price = Number(prod.current_price.replace(/[^0-9\.]+/g,""));
-            if(prod.nutriton && !prod.nutriton.serving_count) prod.nutriton.serving_count = 1;
-            return prod;
+            
+            if(prod.nutritionNDB && prod.nutritionNDB.Energy && prod.size && prod.size.indexOf('oz') > -1) {
+                if(prod.nutritionNDB.unit_type == 'fl oz') prod.nutritionNDB.serving_count =  Number(prod.size.replace(/[^0-9\.]+/g,"")) / (prod.nutritionNDB.unit);
+                else prod.nutritionNDB.serving_count = Number(prod.size.replace(/[^0-9\.]+/g,"")) / (prod.nutritionNDB.eq_gram * 0.035274);
+                prod.nutritionNDB.serving_count = Math.round(prod.nutritionNDB.serving_count);
+                
+                return {
+                    name: prod.brand + ': ' + prod.name,
+                    sku: prod.sku,
+                    //protein_per_dollar: Math.round(prod.nutritionNDB.Protein * prod.nutritionNDB.serving_count / prod.current_price),
+                    cost_per_calories: (cal_goal / Math.round(prod.nutritionNDB.Energy * prod.nutritionNDB.serving_count / prod.current_price)).toFixed(2),
+                    protein_calorie_ratio: Math.round(prod.nutritionNDB.Protein * 4 / prod.nutritionNDB.Energy * 100)
+                };
+            }
+            else if(prod.nutrition && prod.nutrition.calories) {
+                if(!prod.nutrition.serving_count) prod.nutrition.serving_count = 1;
+                return {
+                    name: prod.brand + ': ' + prod.name,
+                    sku: prod.sku,
+                    //protein_per_dollar: Math.round(prod.nutrition.protein * prod.nutrition.serving_count / prod.current_price),
+                    cost_per_day: (cal_goal / Math.round(prod.nutrition.calories * prod.nutrition.serving_count / prod.current_price)).toFixed(2),
+                    protein_calorie_ratio: Math.round(prod.nutrition.protein * 4 / prod.nutrition.calories * 100)
+                };
+            }
+            
+            return null;
         });
         
-        exists = {};
-        
         prods = prods.filter(function(prod) { 
-            if(exists[prod.sku]) return false;
-            exists[prod.sku] = true;
-            
-            return prod.nutrition &&
-            (prod.nutrition.protein / prod.nutrition.calories > 150 / 2000) &&  // 150/1600 protein:cal ratio
-            (prod.nutrition.protein * 4 / prod.nutrition.calories <= 1) &&  // protein !> cal
-            prod.nutrition.protein * prod.nutrition.serving_count / prod.current_price > 30; // 20g protein / dollar
+            return prod !== null &&
+            prod.protein_calorie_ratio >= prot_goal * 4 / cal_goal * 100 &&  // 150/1600 protein:cal ratio
+            prod.protein_calorie_ratio <= 100 &&  // protein is not > cal
+            prod.cost_per_day <= cost_per_day && // 1600 calories for 8 dollars
+            prod.name.indexOf("Bean") === -1;
         });
         
         prods.sort(function(a, b) {
-            // sort by protein/dollar
-            //b_value = b.nutrition.protein * b.nutrition.serving_count / b.current_price;
-            //a_value = a.nutrition.protein * a.nutrition.serving_count / a.current_price;
+            // sort by dollar/1600cal
+            return a.cost_per_day - b.cost_per_day;
             
             // sort by protein:cal
-            b_value = b.nutrition.protein / b.nutrition.calories;
-            a_value = a.nutrition.protein / a.nutrition.calories;
-            return b_value - a_value;
+            //return b.protein_calorie_ratio - a.protein_calorie_ratio;
         });
         
-        res.send(prods.map(function(prod) {
-            return {
-                name: prod.brand + ': ' + prod.name,
-                sku: prod.sku,
-                current_price: prod.current_price,
-                protein_per_dollar: Math.round(prod.nutrition.protein * prod.nutrition.serving_count / prod.current_price),
-                protein_calorie_ratio: Math.round(prod.nutrition.protein * 4 / prod.nutrition.calories * 100) + "%"
-            };
-        }));
+        res.send(prods);
+    });
+});
+
+app.get('/nutrition/scrape', function(req, res) {
+    Product.find({}, function(err, products) {
+        async.eachOfLimit(products, 30, function(product, key, callback) {
+            NutritionNDB.findOne({sku: product.sku}, function(err, nutrition) {
+                if(err || nutrition) return callback();
+                
+                request('https://ndb.nal.usda.gov/ndb/search/list?qlookup=' + product.sku, function(error, response, body) {
+                    if (error || response.statusCode !== 200) return console.log('err:' +  error);
+                    
+                    if(body.indexOf("Click to view reports for this food") === -1) {
+                        NutritionNDB.create({sku: product.sku}, function (err, n) {
+                            if(err) return;
+                            console.log('created nutrition');
+                        });
+                        return callback();
+                    }
+                    var id = body.split("/ndb/foods/show/")[1].split("?")[0];
+                    request('https://ndb.nal.usda.gov/ndb/foods/show/' + id + '?format=Abridged&reportfmt=csv&Qv=1', function(error, response, body) {
+                        if (error || response.statusCode !== 200) return console.log('err:' +  error);
+                        var obj = {
+                            sku: product.sku,
+                            ndb_url: Number(id)
+                        };
+                        var match = /for: (\d+), ([\S ]+), UPC[\S\s]+?Unit,"([.\d]+) ([\S ]+) = ([.\d]+)g/g;
+                        if((m = match.exec(body)) !== null) {
+                            obj.ndb_id = Number(m[1]); 
+                            obj.name = m[2].toLowerCase(); 
+                            obj.unit = Number(m[3]); 
+                            obj.unit_type = m[4]; 
+                            obj.eq_gram = Number(m[5]);
+                            
+                            match = /Ingredients\s"([\S\s]+?)\.{0,1}"/g;
+                            if((m = match.exec(body)) !== null) {
+                                obj.ingredients = m[1].toLowerCase().split(", "); 
+                            }
+                            
+                            match = /"([\S ]+)",\w+,([\d.]+),[\d.]+/g;
+                            while((m = match.exec(body)) !== null) {
+                                obj[m[1]] = Number(m[2]);
+                            }
+                        }
+                        
+                        NutritionNDB.create(obj, function (err, n) {
+                            if(err) return;
+                            console.log('created nutrition');
+                        });
+                        
+                        return callback();
+                    });
+                });
+            });
+        }, function() {
+            console.log('done');
+            res.send('done');
+        });
     });
 });
 
@@ -99,7 +169,10 @@ app.get('/hoboken/update', function(req, res) {
 
                     var url = "https://shop.shoprite.com/api/product/v5/categories/store/" + store.shoprite_id + "/special";
                     request(options(url), function (error, response, body) {
-                        if (error || response.statusCode !== 200) return console.log(err);
+                        if (error || response.statusCode !== 200) {
+                            console.log(err);
+                            return callback();
+                        }
                         
                         async.eachOfLimit(JSON.parse(body), 30, function(cat, key, cb) {
                             console.log('Updating category: ' + cat.Id);

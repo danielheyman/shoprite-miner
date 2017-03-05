@@ -25,4 +25,11 @@ Product.virtual('nutrition', {
     justOne: true
 });
 
+Product.virtual('nutritionNDB', {
+    ref: 'NutritionNDB',
+    localField: 'sku',
+    foreignField: 'sku',
+    justOne: true
+});
+
 module.exports = mongoose.model('Product', Product);
