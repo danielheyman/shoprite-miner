@@ -5,32 +5,32 @@ cal_goal = 1600;
 prot_goal = 110;
 cost_per_day = 10;
 const variables = {
-  calories_for_calculations: 1600, // used to calculate goals and price per day
-  min: { 
-    prot: 110, // at least this much protein for the cal above
-    carb: null, // at least this much carb for the cal above
-    fat: null, // at least this much fat for the cal above
-    sugar: null, // at least this much sugar for the cal above
-    vitamin_a: null, // at least this much vitamin a for the cal above
-    vitamin_c: null, // at least this much vitamin c for the cal above
-    calcium: null // at least this much calcium for the cal above
+  'calories_for_calculations': 1600, // used to calculate goals and price per day
+  'min': { 
+    'prot': null, // at least this much protein for the cal above
+    'carb': null, // at least this much carb for the cal above
+    'fat': null, // at least this much fat for the cal above
+    'sugar': null, // at least this much sugar for the cal above
+    'vitamin_a': null, // at least this much vitamin a for the cal above
+    'vitamin_c': null, // at least this much vitamin c for the cal above
+    'calcium': null // at least this much calcium for the cal above
   },
-  max: {
-    iron: null, // maximum of iron for the cal above
-    prot: null, // maximum of protein for the cal above
-    carb: null, // maximum of carb for the cal above
-    fat: null, // maximum of fat for the cal above
-    sugar: null, // maximum of sugar for the cal above
-    vitamin_a: null, // maximum of vitamin a for the cal above
-    vitamin_c: null, // maximum of vitamin c for the cal above
-    calcium: null, // maximum of calcium for the cal above
-    iron: null // maximum of iron for the cal above
+  'max': {
+    'iron': null, // maximum of iron for the cal above
+    'prot': null, // maximum of protein for the cal above
+    'carb': null, // maximum of carb for the cal above
+    'fat': null, // maximum of fat for the cal above
+    'sugar': null, // maximum of sugar for the cal above
+    'vitamin_a': null, // maximum of vitamin a for the cal above
+    'vitamin_c': null, // maximum of vitamin c for the cal above
+    'calcium': null, // maximum of calcium for the cal above
+    'iron': null // maximum of iron for the cal above
   },
-  cost_per_day: 10, // maximum cost per day to meet calories
-  ingredients_contain: [], // ex: meat to find all meat products
-  ingredients_dont_contain: ['beans'], // ex: meat, chicken, fish, pork, etc to find all veg products
-  on_sale: false, // only find products only on sale,
-  sort_by: 'price_per_day' // or prot, carb, fat, etc.
+  'cost_per_day': 10, // maximum cost per day to meet calories
+  'ingredients_contain': [], // ex: meat to find all meat products
+  'ingredients_dont_contain': [], // ex: meat, chicken, fish, pork, etc to find all veg products
+  'on_sale': false, // only find products only on sale,
+  'sort_by': 'price_per_day' // or prot, carb, fat, etc.
 }
 
 /*
@@ -41,6 +41,9 @@ post('localhost/hoboken', {calories_for_calculations: 1600, goals: { prot: 110 }
 
 var express = require('express');
 var app = express();
+var bodyParser = require('body-parser'); 
+app.use(bodyParser.json()); 
+app.use(bodyParser.urlencoded({ extended: true }));
 global.mongoose = require('mongoose');
 var cacheOpts = {
     max:50,
@@ -79,8 +82,9 @@ var options = function(url) {
 };
 
 
-app.get('/hoboken', function(req, res) {
-    var variables = JSON.parse(request.body.variables);
+app.post('/hoboken', function(req, res) {
+    var param = Object.assign({}, variables, JSON.parse(req.body.variables))
+    
     Product.find({aisle: {$nin: ['2', '3', '4', '5', '6', '13', '14', '15']}}).select('brand name current_price size sku').populate('nutrition', 'ingredients protein carb fat calories serving_count').populate('nutritionNDB', 'ingredients Protein "Carbohydrate, by difference" "Total lipid (fat)" Energy eq_gram unit_type unit').cache().exec(function(err, prods) {
         if(err) return console.log(err);
         
@@ -103,7 +107,7 @@ app.get('/hoboken', function(req, res) {
                     name: prod.brand + ': ' + prod.name,
                     sku: prod.sku,
                     ingredients: prod.nutritionNDB.ingredients.join(','),
-                    cost_per_day: (variables.calories_for_calculations / Math.round(prod.nutritionNDB.Energy * prod.nutritionNDB.serving_count / prod.current_price)).toFixed(2),
+                    cost_per_day: (param.calories_for_calculations / Math.round(prod.nutritionNDB.Energy * prod.nutritionNDB.serving_count / prod.current_price)).toFixed(2),
                     protein_calorie_ratio: Math.round(prod.nutritionNDB.Protein * 4 / prod.nutritionNDB.Energy * 100),
                     carb_calorie_ratio: Math.round(prod.nutritionNDB["Carbohydrate, by difference"] * 4 / prod.nutritionNDB.Energy * 100),
                     far_calorie_ratio: Math.round(prod.nutritionNDB["Total lipid (fat)"] * 4 / prod.nutritionNDB.Energy * 100)
@@ -115,7 +119,7 @@ app.get('/hoboken', function(req, res) {
                     name: prod.brand + ': ' + prod.name,
                     sku: prod.sku,
                     ingredients: prod.nutrition.ingredients.join(','),
-                    cost_per_day: (variables.calories_for_calculations / Math.round(prod.nutrition.calories * prod.nutrition.serving_count / prod.current_price)).toFixed(2),
+                    cost_per_day: (param.calories_for_calculations / Math.round(prod.nutrition.calories * prod.nutrition.serving_count / prod.current_price)).toFixed(2),
                     protein_calorie_ratio: Math.round(prod.nutrition.protein * 4 / prod.nutrition.calories * 100),
                     carb_calorie_ratio: Math.round(prod.nutrition.carb * 4 / prod.nutrition.calories * 100),
                     fat_calorie_ratio: Math.round(prod.nutrition.fat * 4 / prod.nutrition.calories * 100)
@@ -129,27 +133,27 @@ app.get('/hoboken', function(req, res) {
         
         prods = prods.filter(function(prod) { 
             // Filter mins
-            if(variables.min.prot && (!prod.protein_calorie_ratio || prod.protein_calorie_ratio < variables.min.prot * 4 / variables.calories_for_calculations * 100)) return false;
-            if(variables.min.carb && (!prod.carb_calorie_ratio || prod.carb_calorie_ratio < variables.min.carb * 4 / variables.calories_for_calculations * 100)) return false;
-            if(variables.min.fat && (!prod.fat_calorie_ratio || prod.fat_calorie_ratio < variables.min.fat * 4 / variables.calories_for_calculations * 100)) return false;
+            if(param.min.prot && (!prod.protein_calorie_ratio || prod.protein_calorie_ratio < param.min.prot * 4 / param.calories_for_calculations * 100)) return false;
+            if(param.min.carb && (!prod.carb_calorie_ratio || prod.carb_calorie_ratio < param.min.carb * 4 / param.calories_for_calculations * 100)) return false;
+            if(param.min.fat && (!prod.fat_calorie_ratio || prod.fat_calorie_ratio < param.min.fat * 4 / param.calories_for_calculations * 100)) return false;
 
 
             // Filter maxs
-            if(variables.max.prot && prod.protein_calorie_ratio >= variables.max.prot * 4 / variables.calories_for_calculations * 100) return false;
-            if(variables.max.carb && prod.carb_calorie_ratio >= variables.max.carb * 4 / variables.calories_for_calculations * 100) return false;
-            if(variables.max.fat && prod.fat_calorie_ratio >= variables.max.fat * 4 / variables.calories_for_calculations * 100) return false;
+            if(param.max.prot && prod.protein_calorie_ratio >= param.max.prot * 4 / param.calories_for_calculations * 100) return false;
+            if(param.max.carb && prod.carb_calorie_ratio >= param.max.carb * 4 / param.calories_for_calculations * 100) return false;
+            if(param.max.fat && prod.fat_calorie_ratio >= param.max.fat * 4 / param.calories_for_calculations * 100) return false;
             
             // Filter cost per day
-            if(prod.cost_per_day > variables.cost_per_day) return false;
+            if(prod.cost_per_day > param.cost_per_day) return false;
             
-            for(var i = 0; i < variables.ingredients_contain.length; i++) {
-              if(prod.name.toLowerCase().indexOf(variables.ingredients_contain[i].toLowerCase()) === -1) return false;
-              if(prod.ingredients.toLowerCase().indexOf(variables.ingredients_contain[i].toLowerCase()) === -1) return false;
+            for(var i = 0; i < param.ingredients_contain.length; i++) {
+              if(prod.name.toLowerCase().indexOf(param.ingredients_contain[i].toLowerCase()) === -1) return false;
+              if(prod.ingredients.toLowerCase().indexOf(param.ingredients_contain[i].toLowerCase()) === -1) return false;
             }
             
-            for(var i = 0; i < variables.ingredients_dont_contain.length; i++) {
-              if(prod.name.toLowerCase().indexOf(variables.ingredients_dont_contain[i].toLowerCase()) !== -1) return false;
-              if(prod.ingredients.toLowerCase().indexOf(variables.ingredients_dont_contain[i].toLowerCase()) !== -1) return false;
+            for(var i = 0; i < param.ingredients_dont_contain.length; i++) {
+              if(prod.name.toLowerCase().indexOf(param.ingredients_dont_contain[i].toLowerCase()) !== -1) return false;
+              if(prod.ingredients.toLowerCase().indexOf(param.ingredients_dont_contain[i].toLowerCase()) !== -1) return false;
             }
             
             return true;
