@@ -1,11 +1,52 @@
-const auth = 'bb672f98-5901-e711-8708-d89d6763b1d9';
-const cal_goal = 1700; // to calculate cost
-const prot_goal = 150; // at least this much for cal_goal
-const cost_per_day = 8; // maximum cost
+const auth = '323dcc96-cd2d-e711-8708-d89d6763b1d9';
+
+
+cal_goal = 1600;
+prot_goal = 110;
+cost_per_day = 10;
+const variables = {
+  calories_for_calculations: 1600, // used to calculate goals and price per day
+  min: { 
+    prot: 110, // at least this much protein for the cal above
+    carb: null, // at least this much carb for the cal above
+    fat: null, // at least this much fat for the cal above
+    sugar: null, // at least this much sugar for the cal above
+    vitamin_a: null, // at least this much vitamin a for the cal above
+    vitamin_c: null, // at least this much vitamin c for the cal above
+    calcium: null // at least this much calcium for the cal above
+  },
+  max: {
+    iron: null, // maximum of iron for the cal above
+    prot: null, // maximum of protein for the cal above
+    carb: null, // maximum of carb for the cal above
+    fat: null, // maximum of fat for the cal above
+    sugar: null, // maximum of sugar for the cal above
+    vitamin_a: null, // maximum of vitamin a for the cal above
+    vitamin_c: null, // maximum of vitamin c for the cal above
+    calcium: null, // maximum of calcium for the cal above
+    iron: null // maximum of iron for the cal above
+  },
+  cost_per_day: 10, // maximum cost per day to meet calories
+  ingredients_contain: [], // ex: meat to find all meat products
+  ingredients_dont_contain: ['beans'], // ex: meat, chicken, fish, pork, etc to find all veg products
+  on_sale: false, // only find products only on sale,
+  sort_by: 'price_per_day' // or prot, carb, fat, etc.
+}
+
+/*
+
+Ex call for high protein:
+post('localhost/hoboken', {calories_for_calculations: 1600, goals: { prot: 110 }, cost_per_day: 10})
+*/
 
 var express = require('express');
 var app = express();
 global.mongoose = require('mongoose');
+var cacheOpts = {
+    max:50,
+    maxAge:1000*60*2
+};
+require('mongoose-cache').install(mongoose, cacheOpts)
 mongoose.connect('mongodb://localhost/shoprite');
 var request = require('request');
 var async = require('async');
@@ -17,6 +58,10 @@ var db = mongoose.connection;
 db.on('error', console.error.bind(console, 'connection error:'));
 db.once('open', function() {
     console.log('connected to db');
+    console.log('loading products');
+    Product.find({aisle: {$nin: ['2', '3', '4', '5', '6', '13', '14', '15']}}).select('brand name current_price size sku').populate('nutrition', 'ingredients protein carb fat calories serving_count').populate('nutritionNDB', 'ingredients Protein "Carbohydrate, by difference" "Total lipid (fat)" Energy eq_gram unit_type unit').cache().exec(function(err, prods) {
+      console.log('loaded products');
+    });
 });
 
 
@@ -34,10 +79,12 @@ var options = function(url) {
 };
 
 
-
 app.get('/hoboken', function(req, res) {
-    Product.find({}).select('brand name current_price size sku').populate('nutrition', 'protein calories serving_count').populate('nutritionNDB', 'Protein Energy eq_gram unit_type unit').exec(function(err, prods) {
+    var variables = JSON.parse(request.body.variables);
+    Product.find({aisle: {$nin: ['2', '3', '4', '5', '6', '13', '14', '15']}}).select('brand name current_price size sku').populate('nutrition', 'ingredients protein carb fat calories serving_count').populate('nutritionNDB', 'ingredients Protein "Carbohydrate, by difference" "Total lipid (fat)" Energy eq_gram unit_type unit').cache().exec(function(err, prods) {
         if(err) return console.log(err);
+        
+        console.log('found items: ' + prods.length);
         
         prods = prods.map(function(prod) {
             prod = prod.toJSON();
@@ -55,9 +102,11 @@ app.get('/hoboken', function(req, res) {
                 return {
                     name: prod.brand + ': ' + prod.name,
                     sku: prod.sku,
-                    //protein_per_dollar: Math.round(prod.nutritionNDB.Protein * prod.nutritionNDB.serving_count / prod.current_price),
-                    cost_per_calories: (cal_goal / Math.round(prod.nutritionNDB.Energy * prod.nutritionNDB.serving_count / prod.current_price)).toFixed(2),
-                    protein_calorie_ratio: Math.round(prod.nutritionNDB.Protein * 4 / prod.nutritionNDB.Energy * 100)
+                    ingredients: prod.nutritionNDB.ingredients.join(','),
+                    cost_per_day: (variables.calories_for_calculations / Math.round(prod.nutritionNDB.Energy * prod.nutritionNDB.serving_count / prod.current_price)).toFixed(2),
+                    protein_calorie_ratio: Math.round(prod.nutritionNDB.Protein * 4 / prod.nutritionNDB.Energy * 100),
+                    carb_calorie_ratio: Math.round(prod.nutritionNDB["Carbohydrate, by difference"] * 4 / prod.nutritionNDB.Energy * 100),
+                    far_calorie_ratio: Math.round(prod.nutritionNDB["Total lipid (fat)"] * 4 / prod.nutritionNDB.Energy * 100)
                 };
             }
             else if(prod.nutrition && prod.nutrition.calories) {
@@ -65,21 +114,48 @@ app.get('/hoboken', function(req, res) {
                 return {
                     name: prod.brand + ': ' + prod.name,
                     sku: prod.sku,
-                    //protein_per_dollar: Math.round(prod.nutrition.protein * prod.nutrition.serving_count / prod.current_price),
-                    cost_per_day: (cal_goal / Math.round(prod.nutrition.calories * prod.nutrition.serving_count / prod.current_price)).toFixed(2),
-                    protein_calorie_ratio: Math.round(prod.nutrition.protein * 4 / prod.nutrition.calories * 100)
+                    ingredients: prod.nutrition.ingredients.join(','),
+                    cost_per_day: (variables.calories_for_calculations / Math.round(prod.nutrition.calories * prod.nutrition.serving_count / prod.current_price)).toFixed(2),
+                    protein_calorie_ratio: Math.round(prod.nutrition.protein * 4 / prod.nutrition.calories * 100),
+                    carb_calorie_ratio: Math.round(prod.nutrition.carb * 4 / prod.nutrition.calories * 100),
+                    fat_calorie_ratio: Math.round(prod.nutrition.fat * 4 / prod.nutrition.calories * 100)
                 };
             }
             
             return null;
-        });
+        }).filter(prod => prod);
+        
+        console.log('found with nutrition: ' + prods.length);
         
         prods = prods.filter(function(prod) { 
-            return prod !== null &&
-            prod.protein_calorie_ratio >= prot_goal * 4 / cal_goal * 100 &&  // 150/1600 protein:cal ratio
-            prod.protein_calorie_ratio <= 100 &&  // protein is not > cal
-            prod.cost_per_day <= cost_per_day && // 1600 calories for 8 dollars
-            prod.name.indexOf("Bean") === -1;
+            // Filter mins
+            if(variables.min.prot && (!prod.protein_calorie_ratio || prod.protein_calorie_ratio < variables.min.prot * 4 / variables.calories_for_calculations * 100)) return false;
+            if(variables.min.carb && (!prod.carb_calorie_ratio || prod.carb_calorie_ratio < variables.min.carb * 4 / variables.calories_for_calculations * 100)) return false;
+            if(variables.min.fat && (!prod.fat_calorie_ratio || prod.fat_calorie_ratio < variables.min.fat * 4 / variables.calories_for_calculations * 100)) return false;
+
+
+            // Filter maxs
+            if(variables.max.prot && prod.protein_calorie_ratio >= variables.max.prot * 4 / variables.calories_for_calculations * 100) return false;
+            if(variables.max.carb && prod.carb_calorie_ratio >= variables.max.carb * 4 / variables.calories_for_calculations * 100) return false;
+            if(variables.max.fat && prod.fat_calorie_ratio >= variables.max.fat * 4 / variables.calories_for_calculations * 100) return false;
+            
+            // Filter cost per day
+            if(prod.cost_per_day > variables.cost_per_day) return false;
+            
+            for(var i = 0; i < variables.ingredients_contain.length; i++) {
+              if(prod.name.toLowerCase().indexOf(variables.ingredients_contain[i].toLowerCase()) === -1) return false;
+              if(prod.ingredients.toLowerCase().indexOf(variables.ingredients_contain[i].toLowerCase()) === -1) return false;
+            }
+            
+            for(var i = 0; i < variables.ingredients_dont_contain.length; i++) {
+              if(prod.name.toLowerCase().indexOf(variables.ingredients_dont_contain[i].toLowerCase()) !== -1) return false;
+              if(prod.ingredients.toLowerCase().indexOf(variables.ingredients_dont_contain[i].toLowerCase()) !== -1) return false;
+            }
+            
+            return true;
+        }).map(function(prod) {
+          delete prod.ingredients;
+          return prod;
         });
         
         prods.sort(function(a, b) {
@@ -95,8 +171,9 @@ app.get('/hoboken', function(req, res) {
 });
 
 app.get('/nutrition/scrape', function(req, res) {
-    Product.find({}, function(err, products) {
+    Product.find({aisle: {$nin: ['2', '3', '4', '5', '6', '13', '14', '15']}}, function(err, products) {
         async.eachOfLimit(products, 30, function(product, key, callback) {
+            findNutrition(product.sku);
             NutritionNDB.findOne({sku: product.sku}, function(err, nutrition) {
                 if(err || nutrition) return callback();
                 

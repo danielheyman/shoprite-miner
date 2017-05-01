@@ -12,6 +12,7 @@
     "async": "^2.1.5",
     "express": "^4.14.1",
     "mongoose": "^4.8.5",
+    "mongoose-cache": "^0.1.5",
     "request": "^2.79.0"
   }
 }
